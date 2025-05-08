@@ -18,9 +18,9 @@ matcher:
 
 # Tracking parameters
 tracker:
-  min_keypoints: 100
-  max_frame_to_keyframe_dist: 50
-  min_tracked_points: 50
+  min_keypoints: 50
+  max_frame_to_keyframe_dist: 10
+  min_tracked_points: 10
 
 # Mapping parameters
 mapper:

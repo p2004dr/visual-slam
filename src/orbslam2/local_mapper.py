@@ -7,6 +7,7 @@ This module handles keyframe processing, map point creation, and map refinement.
 import numpy as np
 import cv2
 from collections import defaultdict
+from scipy.optimize import least_squares
 from .utils import triangulate_points, convert_to_3d_points, compute_projection_matrix, create_point_cloud_ply
 
 
@@ -72,10 +73,10 @@ class LocalMapper:
         # Process new keyframe: triangulate new map points, etc.
         if len(self.keyframes) > 1:
             self._process_new_keyframe(keyframe)
-            
-        # Update map if we have enough keyframes
         if len(self.keyframes) >= 2:
             self._update_map()
+            # Aquí lanzamos el BA sólo sobre los últimos N keyframes:
+            self._local_bundle_adjustment(window_size=5)
     
     def update_map_points(self, new_map_points):
         """
@@ -511,3 +512,91 @@ class LocalMapper:
         connected_kfs = [kf_id for kf_id, conn in connections.items() if conn >= min_connections]
         
         return connected_kfs
+    
+    def _local_bundle_adjustment(self, window_size=5):
+        """
+        Local Bundle Adjustment over las últimas `window_size` keyframes.
+        Optimiza ambas poses (rvec,tvec) y posiciones de puntos 3D para minimizar
+        el error de reproyección.
+        """
+        if len(self.keyframes) < 2:
+            return
+
+        # Elegir los últimos N keyframes
+        kfs = self.keyframes[-window_size:]
+        kf_ids = [kf['id'] for kf in kfs]
+
+        # Map points observados en estos keyframes
+        mp_ids = set()
+        obs = []  # lista de (kf_idx, mp_id, u, v)
+        for kf in kfs:
+            for mp_id in kf.get('map_points', []):
+                mp_ids.add(mp_id)
+                kp_id = kf['map_points'].index(mp_id)
+                pt = kf['keypoints'][kp_id].pt
+                obs.append((kf['id'], mp_id, pt[0], pt[1]))
+        if not obs:
+            return
+
+        mp_ids = sorted(mp_ids)
+        # Index maps
+        kf_idx_map = {kf_id: i for i, kf_id in enumerate(kf_ids)}
+        mp_idx_map = {mp_id: i for i, mp_id in enumerate(mp_ids)}
+
+        # Variables: poses (6*N) + points (3*M)
+        n_kf = len(kf_ids)
+        n_mp = len(mp_ids)
+        x0 = []
+        # Poses: rvec (3) + tvec (3)
+        for kf in kfs:
+            R = kf['pose'][:3,:3]
+            t = kf['pose'][:3,3]
+            rvec, _ = cv2.Rodrigues(R)
+            x0.extend(rvec.ravel().tolist())
+            x0.extend(t.ravel().tolist())
+        # Points: positions
+        for mp_id in mp_ids:
+            pos = next(mp['position'] for mp in self.map_points if mp['id']==mp_id)
+            x0.extend(pos.tolist())
+        x0 = np.array(x0)
+
+        # Función residual
+        def residuals(x):
+            res = []
+            # Desempaquetar
+            poses = x[:6*n_kf].reshape(n_kf, 6)
+            pts3d = x[6*n_kf:].reshape(n_mp, 3)
+            for kf_id, mp_id, u, v in obs:
+                i_kf = kf_idx_map[kf_id]
+                i_mp = mp_idx_map[mp_id]
+                rvec = poses[i_kf,:3]
+                tvec = poses[i_kf,3:6]
+                # Proyectar
+                R, _ = cv2.Rodrigues(rvec)
+                P = np.hstack((R, tvec.reshape(3,1)))
+                proj = self.camera_matrix @ P @ np.append(pts3d[i_mp], 1.0)
+                u_proj = proj[0]/proj[2]
+                v_proj = proj[1]/proj[2]
+                res.extend([u_proj - u, v_proj - v])
+            return np.array(res)
+
+        # Llamar a least_squares
+        sol = least_squares(residuals, x0, verbose=0, xtol=1e-4, ftol=1e-4, max_nfev=100)
+
+        # Actualizar poses
+        solx = sol.x
+        poses_opt = solx[:6*n_kf].reshape(n_kf,6)
+        for i, kf in enumerate(kfs):
+            rvec = poses_opt[i,:3]
+            tvec = poses_opt[i,3:6]
+            R_opt, _ = cv2.Rodrigues(rvec)
+            T = np.eye(4)
+            T[:3,:3] = R_opt
+            T[:3,3]  = tvec
+            kf['pose'] = T
+
+        # Actualizar puntos 3D
+        pts_opt = solx[6*n_kf:].reshape(n_mp,3)
+        for i, mp_id in enumerate(mp_ids):
+            mp = next(mp for mp in self.map_points if mp['id']==mp_id)
+            mp['position'] = pts_opt[i]

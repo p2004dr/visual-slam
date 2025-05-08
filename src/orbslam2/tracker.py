@@ -192,62 +192,79 @@ class Tracker:
                 return True
             
             return False
-    
+
     def _track_from_last_frame(self, frame, keypoints, descriptors):
         """
-        Track camera motion from the last frame.
-        
+        Track camera motion from the last frame using PnP 2D–3D against the global map.
+
         Args:
-            frame (np.array): Current frame.
-            keypoints (list): List of keypoints.
-            descriptors (np.array): Descriptors.
-            
+            frame (np.array): Current grayscale frame.
+            keypoints (list): Keypoints detected in `frame`.
+            descriptors (np.array): Descriptors for those keypoints.
+
         Returns:
-            tuple: (success, transformation_matrix, visualization_image)
+            tuple: (success: bool, transformation_matrix: np.array 4x4, visualization_image: np.array or None)
         """
-        if self.last_keypoints is None or self.last_descriptors is None:
+        # 0) Chequeos básicos
+        if not self.local_mapper.map_points or descriptors is None:
             return False, None, None
-            
-        # Match features with the last frame
-        matches = self.matcher.match(self.last_descriptors, descriptors)
-        
-        # Filter matches
-        matches = self.matcher.filter_matches_by_distance(matches)
-        
-        # Need at least 8 matches to estimate essential matrix
-        if len(matches) < 8:
+
+        # 1) Filtrar solo map points con descriptor
+        valid_mps = [mp for mp in self.local_mapper.map_points if 'descriptor' in mp]
+        if not valid_mps:
             return False, None, None
-            
-        # Get matched points
-        points1 = np.float32([self.last_keypoints[m.queryIdx].pt for m in matches])
-        points2 = np.float32([keypoints[m.trainIdx].pt for m in matches])
-        
-        # Calculate essential matrix and recover pose
-        E, mask = cv2.findEssentialMat(points1, points2, self.camera_matrix, cv2.RANSAC, 0.999, 1.0)
-        
-        # Check if we have a valid essential matrix
-        if E is None or E.shape != (3, 3):
+
+        # 2) Sacar arrays de posiciones 3D y descriptores de mapa
+        pts3d = np.array([mp['position'] for mp in valid_mps], dtype=np.float32)
+        des3d = np.array([mp['descriptor'] for mp in valid_mps], dtype=np.uint8)
+
+        # 3) Emparejar 3D->2D (map-points contra frame actual)
+        matches = self.matcher.match(des3d, descriptors, ratio_test=True)
+        min_tracked = getattr(self, 'min_tracked_points', 15)
+        if len(matches) < min_tracked:
             return False, None, None
-            
-        # Recover relative pose
-        _, R, t, mask = cv2.recoverPose(E, points1, points2, self.camera_matrix, mask=mask)
-        
-        # Create transformation matrix
-        T = np.eye(4)
-        T[:3, :3] = R
-        T[:3, 3] = t.reshape(3)
-        
-        # Visualization of matches
-        inlier_matches = [m for i, m in enumerate(matches) if mask[i]]
-        vis_image = cv2.drawMatches(
-            self.last_frame, self.last_keypoints,
-            frame, keypoints,
-            inlier_matches[:50],  # Show top 50 matches for clarity
-            None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
+
+        # 4) Construir correspondencias
+        object_points = np.float32([pts3d[m.queryIdx] for m in matches]).reshape(-1, 3)
+        image_points  = np.float32([keypoints[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+
+        # 5) PnP RANSAC
+        success, rvec, tvec, inliers = cv2.solvePnPRansac(
+            object_points, image_points,
+            self.camera_matrix, self.distortion_coeffs,
+            flags=cv2.SOLVEPNP_ITERATIVE,
+            reprojectionError=8.0,
+            confidence=0.99
         )
-        
+        if not success or inliers is None or len(inliers) < min_tracked:
+            return False, None, None
+
+        # 6) Convertir rvec/tvec a matriz 4x4
+        R, _ = cv2.Rodrigues(rvec)
+        T = np.eye(4, dtype=float)
+        T[:3, :3] = R
+        T[:3, 3] = tvec.ravel()
+
+        # 7) Visualizar solo inliers
+        inlier_matches = [matches[i[0]] for i in inliers]
+        vis_image = cv2.drawMatches(
+            getattr(self, 'last_frame', frame),
+            getattr(self, 'last_keypoints', []),
+            frame, keypoints,
+            inlier_matches[:50],
+            None,
+            flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
+        )
+
+        # 8) Actualizar estado interno
+        self._update_pose(T)
+        self.last_frame = frame.copy()
+        self.last_keypoints = keypoints
+        self.last_descriptors = descriptors
+
         return True, T, vis_image
-    
+
+
     def _update_pose(self, transformation_matrix):
         """
         Update the camera pose with a new transformation.
