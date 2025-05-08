@@ -1,0 +1,9 @@
+"""
+Python implementation of a simplified ORB-SLAM2 system.
+
+This package implements a monocular visual SLAM system inspired by ORB-SLAM2.
+It extracts ORB features from video frames, tracks them across frames,
+and builds a 3D map of the environment.
+"""
+
+__version__ = '0.1.0'
