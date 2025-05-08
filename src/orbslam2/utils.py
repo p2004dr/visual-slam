@@ -52,33 +52,22 @@ def undistort_image(image, camera_matrix, distortion):
     return cv2.undistort(image, camera_matrix, distortion)
 
 
-def triangulate_points(kp1, kp2, P1, P2):
-    """
-    Triangulate 3D points from matching keypoints in two views.
-
-    Args:
-        kp1 (np.array): Nx2 array of points in first image.
-        kp2 (np.array): Nx2 array of points in second image.
-        P1 (np.array): 3x4 projection matrix first view.
-        P2 (np.array): 3x4 projection matrix second view.
-
-    Returns:
-        np.array: 4xN homogeneous coordinates of 3D points.
-    """
-    return cv2.triangulatePoints(P1, P2, kp1.T, kp2.T)
-
+# En utils.py (corregido)
+def triangulate_points(points1, points2, P1, P2):
+    points1 = points1.T  # Convierte (N,2) → (2,N)
+    points2 = points2.T
+    points_4d = cv2.triangulatePoints(P1, P2, points1, points2)
+    return points_4d  # Shape (4,N)
 
 def convert_to_3d_points(points_4d):
-    """
-    Convert homogeneous 4D points to 3D.
-
-    Args:
-        points_4d (np.array): 4xN homogeneous points.
-
-    Returns:
-        np.array: 3xN Cartesian 3D points.
-    """
-    return points_4d[:3] / points_4d[3]
+    """Convierte puntos homogéneos 4D (x,y,z,w) a 3D euclídeos (x/w, y/w, z/w)."""
+    # Asegurar que el array es (4, N)
+    if points_4d.shape[0] != 4:
+        points_4d = points_4d.T
+    
+    # Dividir por w y transponer para obtener (N, 3)
+    points_3d = (points_4d[:3] / points_4d[3]).T
+    return points_3d
 
 
 def create_point_cloud_ply(points_3d, colors, output_path):

@@ -113,10 +113,11 @@ class ORBExtractor:
                 )
                 
                 if cell_keypoints is not None:
-                    # Convert to cv2.KeyPoint objects
-                    for kp in cell_keypoints:
-                        x, y = kp.ravel()
-                        all_keypoints.append(cv2.KeyPoint(x, y, 31))
+                    # Convertir CADA punto a cv2.KeyPoint ✅
+                    for pt in cell_keypoints:
+                        x, y = pt.ravel()
+                        kp = cv2.KeyPoint(float(x), float(y), 31)
+                        all_keypoints.append(kp)
         
         # Compute descriptors for all keypoints
         if all_keypoints:

@@ -30,6 +30,7 @@ class MapInitializer:
         self.first_frame_keypoints = None
         self.first_frame_descriptors = None
         self.first_frame_image = None
+        self.current_frame_keypoints = None 
         
     def set_first_frame(self, keypoints, descriptors, image):
         """
@@ -74,93 +75,108 @@ class MapInitializer:
         points1 = np.float32([self.first_frame_keypoints[m.queryIdx].pt for m in matches])
         points2 = np.float32([current_keypoints[m.trainIdx].pt for m in matches])
         
-        # Calculate essential matrix
-        E, mask = calculate_essential_matrix(points1, points2, self.camera_matrix)
-        
-        # Check if we have enough inliers
-        inliers_count = np.sum(mask)
-        inliers_ratio = inliers_count / len(matches)
-        
-        if inliers_ratio < self.min_inliers_ratio:
-            print(f"Not enough inliers for initialization: {inliers_ratio:.2f} < {self.min_inliers_ratio}")
-            return False, None, None, None, matches
+        # Calculate essential matrix with higher threshold
+        E, mask = calculate_essential_matrix(points1, points2, self.camera_matrix, threshold=3.0)
         
         # Recover pose (R,t) from essential matrix
-        R, t, mask_pose = recover_pose(E, points1, points2, self.camera_matrix, mask)
+        _, R, t, mask_pose, *_ = recover_pose(E, points1, points2, self.camera_matrix, mask)
+        t = t.reshape(3, 1) if t.ndim == 1 else t
         
         # Create projection matrices
         P1 = compute_projection_matrix(np.eye(3), np.zeros((3, 1)), self.camera_matrix)
         P2 = compute_projection_matrix(R, t, self.camera_matrix)
         
-        # Filter points based on pose recovery mask
+        # Filter matches using pose recovery mask
         valid_matches = [m for m, valid in zip(matches, mask_pose.ravel().astype(bool)) if valid]
         points1 = np.float32([self.first_frame_keypoints[m.queryIdx].pt for m in valid_matches])
         points2 = np.float32([current_keypoints[m.trainIdx].pt for m in valid_matches])
         
-        # Triangulate points to get 3D map points
+        # Triangulate points
         points_4d = triangulate_points(points1, points2, P1, P2)
         points_3d = convert_to_3d_points(points_4d)
+
         
-        # Extract colors from the first frame for visualization
+        print("\n=== Debug Triangulación ===")
+        print("Shape points_4d:", points_4d.shape)  # Debería ser (4, N)
+        print("Ejemplo punto 4D:", points_4d[:,0])  # Debería tener 4 componentes
+        print("Shape points_3d:", points_3d.shape)  # Debería ser (3, N) o (N,3)
+        print("Ejemplo punto 3D:", points_3d[0])    # Debería tener 3 componentes
+
+        # Filter points behind cameras
+        valid_indices = []
+        for i, pt in enumerate(points_3d):
+            # Depth in first camera (P1 is identity)
+            depth1 = pt[2]
+            # Depth in second camera (transformed by R and t)
+            print("\n=== Debug Geometría ===")
+            print("Shape R:", R.shape)  # Debe ser (3,3)
+            print("Shape t:", t.shape)  # Debe ser (3,1) o (3,)
+            print("Primer punto pt:", points_3d[0].shape)  # Debe ser (3,)
+            pt_cam2 = R @ pt + t.ravel()
+            depth2 = pt_cam2[2]
+            if depth1 > 0 and depth2 > 0:
+                valid_indices.append(i)
+        
+        points_3d = points_3d[valid_indices]
+        valid_matches = [valid_matches[i] for i in valid_indices]
+        
+        # Check if we have sufficient valid points
+        if len(points_3d) < self.min_matches//2:
+            print(f"Insufficient valid 3D points after filtering: {len(points_3d)}")
+            return False, None, None, None, valid_matches
+        
+        # Extract colors for visualization
         colors = []
-        for point, match in zip(points_3d, valid_matches):
-            x, y = int(self.first_frame_keypoints[match.queryIdx].pt[0]), int(self.first_frame_keypoints[match.queryIdx].pt[1])
+        for match in valid_matches:
+            kp = self.first_frame_keypoints[match.queryIdx]
+            x, y = int(kp.pt[0]), int(kp.pt[1])
             if 0 <= x < self.first_frame_image.shape[1] and 0 <= y < self.first_frame_image.shape[0]:
-                if len(self.first_frame_image.shape) == 3:  # Color image
+                if self.first_frame_image.ndim == 3:  # Color image
                     color = self.first_frame_image[y, x, :]
-                else:  # Grayscale image
-                    color = np.array([self.first_frame_image[y, x]] * 3)
-                colors.append(color)
+                else:  # Grayscale
+                    color = np.array([self.first_frame_image[y, x]]*3)
             else:
-                colors.append(np.array([0, 0, 255]))  # Default blue
+                color = np.array([0, 0, 255])
+            colors.append(color)
         
-        # Create initial map points with keypoint references
-        initial_map_points = []
-        for i, (point_3d, match) in enumerate(zip(points_3d, valid_matches)):
-            map_point = {
-                'position': point_3d,
-                'color': colors[i] if i < len(colors) else np.array([0, 0, 255]),
-                'keypoint_references': {
-                    0: match.queryIdx,  # First frame keypoint index
-                    1: match.trainIdx    # Current frame keypoint index
-                },
-                'observed_frames': [0, 1]  # Frame indices where this point was observed
-            }
-            initial_map_points.append(map_point)
+        # Create map points
+        initial_map_points = [{
+            'position': pt,
+            'color': colors[i],
+            'keypoint_references': {0: m.queryIdx, 1: m.trainIdx},
+            'observed_frames': [0, 1]
+        } for i, (pt, m) in enumerate(zip(points_3d, valid_matches))]
         
         self.initialization_done = True
         
+        self.current_frame_keypoints = current_keypoints
         return True, R, t, initial_map_points, valid_matches
-    
+        
     def draw_initialization(self, first_image, current_image, matches):
         """
-        Draw initialization results for visualization.
+        Dibuja los matches entre el primer frame y el frame actual.
         
         Args:
-            first_image (np.array): First frame image.
-            current_image (np.array): Current frame image.
-            matches (list): List of matches.
+            first_image (np.array): Imagen del primer frame.
+            current_image (np.array): Imagen del frame actual.
+            matches (list): Lista de objetos DMatch.
             
         Returns:
-            np.array: Image with matches drawn.
+            np.array: Imagen con los matches dibujados.
         """
-        # Ensure images are color for drawing
-        if len(first_image.shape) == 2:
-            first_image_color = cv2.cvtColor(first_image, cv2.COLOR_GRAY2BGR)
-        else:
-            first_image_color = first_image.copy()
-            
-        if len(current_image.shape) == 2:
-            current_image_color = cv2.cvtColor(current_image, cv2.COLOR_GRAY2BGR)
-        else:
-            current_image_color = current_image.copy()
-        
-        # Draw matches
-        result = cv2.drawMatches(
-            first_image_color, self.first_frame_keypoints,
-            current_image_color, None,  # We'll fill in current keypoints below
-            matches, None,
-            flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
+        # Convertir a color si es necesario
+        first_img = cv2.cvtColor(first_image, cv2.COLOR_GRAY2BGR) if len(first_image.shape) == 2 else first_image.copy()
+        current_img = cv2.cvtColor(current_image, cv2.COLOR_GRAY2BGR) if len(current_image.shape) == 2 else current_image.copy()
+
+        # Usar TODOS los keypoints del frame actual, no solo los filtrados
+        return cv2.drawMatches(
+            first_img, 
+            self.first_frame_keypoints,
+            current_img, 
+            self.current_frame_keypoints,  # Keypoints completos del segundo frame
+            matches, 
+            None,
+            flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
+            matchColor=(0, 255, 0),  # Color verde para los matches
+            singlePointColor=(255, 0, 0)  # Color azul para keypoints no emparejados
         )
-        
-        return result
