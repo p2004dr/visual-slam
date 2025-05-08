@@ -69,27 +69,53 @@ def convert_to_3d_points(points_4d):
     points_3d = (points_4d[:3] / points_4d[3]).T
     return points_3d
 
-
 def create_point_cloud_ply(points_3d, colors, output_path):
     """
-    Save 3D points and corresponding colors to a PLY file.
+    Create a PLY file from 3D points and colors.
 
     Args:
-        points_3d (np.array): 3xN array of 3D points.
-        colors (np.array): N×3 array of RGB values (0-255).
-        output_path (str): File path for the PLY output.
+        points_3d (np.array): Nx3 array of 3D points.
+        colors (np.array): Nx3 array of RGB colors or Nx1 grayscale.
+        output_path (str): File path to save the PLY file.
     """
-    points_3d = points_3d.T
-    colors = colors.astype(int)
-    num_points = points_3d.shape[0]
-    with open(output_path, 'w') as f:
-        f.write("ply\nformat ascii 1.0\n")
-        f.write(f"element vertex {num_points}\n")
-        f.write("property float x\nproperty float y\nproperty float z\n")
-        f.write("property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n")
-        for (x, y, z), (r, g, b) in zip(points_3d, colors):
-            f.write(f"{x} {y} {z} {r} {g} {b}\n")
+    # Ensure numpy arrays
+    pts = np.array(points_3d)
+    cols = np.array(colors)
 
+    # Debug shapes
+    print(f"DEBUG create_point_cloud_ply: pts.shape={pts.shape}, cols.shape={cols.shape}")
+
+    # Ensure colors have shape (N,3)
+    if cols.ndim == 1:
+        # Grayscale values, replicate to RGB
+        cols = np.tile(cols.reshape(-1,1), (1,3))
+    elif cols.ndim == 2 and cols.shape[1] == 4:
+        # RGBA, drop alpha
+        cols = cols[:, :3]
+    elif cols.ndim == 2 and cols.shape[1] != 3:
+        # Unexpected, trim or pad
+        cols = cols[:, :3] if cols.shape[1] > 3 else np.tile(cols, (1, 3 // cols.shape[1] + 1))[:,:3]
+
+    # Write PLY header
+    header = (
+        "ply\n"
+        "format ascii 1.0\n"
+        f"element vertex {pts.shape[0]}\n"
+        "property float x\n"
+        "property float y\n"
+        "property float z\n"
+        "property uchar red\n"
+        "property uchar green\n"
+        "property uchar blue\n"
+        "end_header\n"
+    )
+
+    with open(output_path, 'w') as f:
+        f.write(header)
+        for (x, y, z), (r, g, b) in zip(pts, cols):
+            f.write(f"{x} {y} {z} {int(r)} {int(g)} {int(b)}\n")
+
+    print(f"Saved PLY to {output_path}")
 
 def calculate_essential_matrix(points1, points2, camera_matrix, method=cv2.RANSAC, prob=0.999, threshold=1.0):
     """
@@ -110,7 +136,25 @@ def recover_pose(E, points1, points2, camera_matrix, mask=None):
 
 def compute_projection_matrix(R, t, camera_matrix):
     """
-    Compute projection matrix P = K [R|t].
+    Compute 3x4 projection matrix P = K * [R | t]
+    Ensures that t tiene forma (3,1) para poder hacer hstack.
     """
-    Rt = np.hstack((R, t))
-    return camera_matrix @ Rt
+    import numpy as np
+
+    # Convertir a array y asegurar 2D
+    t = np.array(t)
+    # DEBUG: imprimimos dimensiones para verificar
+    # print(f"DEBUG compute_projection_matrix: R.shape={R.shape}, t.shape(before)={t.shape}")
+
+    if t.ndim == 1:
+        t = t.reshape(3, 1)
+    elif t.ndim == 2 and t.shape[0] == 1 and t.shape[1] == 3:
+        # si llega como (1,3), convertir a (3,1)
+        t = t.reshape(3, 1)
+    # tras este reshape, t debe ser (3,1)
+    # print(f"DEBUG compute_projection_matrix: t.shape(after)={t.shape}")
+
+    Rt = np.hstack((R, t))  # ahora R: (3,3), t: (3,1) → Rt: (3,4)
+    P = camera_matrix @ Rt
+
+    return P

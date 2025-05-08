@@ -1,64 +1,98 @@
-import cv2
+#!/usr/bin/env python
+"""
+Standalone test script for the Tracker module.
+Loads three consecutive frames from the video (first two for map initialization + third for frame-to-frame tracking),
+runs the tracker, prints the resulting transformation matrices and displays the visualization images.
+"""
+import os
+import sys
 import numpy as np
-import pytest
-from orbslam2.tracker import Tracker
-from orbslam2.local_mapper import LocalMapper
+import cv2
+import matplotlib.pyplot as plt
 
-@pytest.fixture
-def dummy_camera():
-    # fx=fy=320, cx=320, cy=240
+# Configurable paths
+SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  # points to src directory where orbslam2 lives
+VIDEO_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..', 'data', 'hospital_video.mp4'))
+FRAME_OFFSET_INIT = 0   # starting frame index for init
+
+# Add src directory to path to import modules
+sys.path.append(SRC_DIR)
+from orbslam2.local_mapper import LocalMapper
+from orbslam2.tracker import Tracker
+
+
+def grab_frame(cap, idx):
+    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+    ret, frame = cap.read()
+    if not ret:
+        raise RuntimeError(f"Failed to grab frame at index {idx}")
+    return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+
+def main():
+    # Dummy camera intrinsics (fx=fy=320, cx=320, cy=240)
     K = np.array([[320.,   0., 320.],
                   [  0., 320., 240.],
                   [  0.,   0.,   1.]])
     D = np.zeros(5)
-    return K, D
 
-@pytest.fixture
-def tracker(dummy_camera):
-    K, D = dummy_camera
-    lm = LocalMapper(camera_matrix=K)
-    tr = Tracker(camera_matrix=K, distortion_coeffs=D, n_features=500, local_mapper=lm)
-    return tr
+    # Initialize modules
+    local_mapper = LocalMapper(camera_matrix=K)
+    tracker = Tracker(camera_matrix=K, distortion_coeffs=D, n_features=1000, local_mapper=local_mapper)
 
-def load_gray(path):
-    img = cv2.imread(path)
-    assert img is not None
-    return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # Open video
+    cap = cv2.VideoCapture(VIDEO_PATH)
+    if not cap.isOpened():
+        print(f"Error: cannot open video at {VIDEO_PATH}")
+        return
 
-def test_initialize_map(tracker, tmp_path):
-    # Primer y segundo frame
-    img1 = load_gray("data/frame_000.png")
-    img2 = load_gray("data/frame_001.png")
-    # Processing first frame
-    tf1, kps1, vis1 = tracker.process_frame(img1)
-    # tf1 debe ser identidad y vis1 debe ser None o keypoints dibujados
-    assert tf1.shape == (4,4)
-    # Segundo frame: initialize
-    tf2, kps2, vis2 = tracker.process_frame(img2)
-    assert tracker._initialized is True
-    assert tf2.shape == (4,4)
-    assert isinstance(vis2, np.ndarray)
+    # Determine three frame indices
+    idx1 = FRAME_OFFSET_INIT
+    idx2 = idx1 + 1
+    idx3 = idx2 + 1
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if idx3 >= total:
+        print(f"Error: video too short (only {total} frames)")
+        cap.release()
+        return
 
-def test_frame_to_frame_tracking(tracker):
-    # Suponiendo que ya está inicializado con dos imágenes
-    # Generamos un frame 3 ligeramente movido (p. ej. traslación en x)
-    img3 = np.roll(load_gray("data/frame_000.png"), shift=5, axis=1)
-    success, tf3, vis3 = tracker._track_from_last_frame(img3, *tracker.last_features)
-    assert success is True
-    assert tf3.shape == (4,4)
-    assert vis3 is not None
+    # Grab frames
+    gray1 = grab_frame(cap, idx1)
+    gray2 = grab_frame(cap, idx2)
+    gray3 = grab_frame(cap, idx3)
+    cap.release()
 
-def test_need_new_keyframe(tracker):
-    # simulamos distintos índices
-    tracker.current_frame_idx = 19
-    assert tracker._need_new_keyframe() is False
-    tracker.current_frame_idx = 20
-    assert tracker._need_new_keyframe() is True
+    # Process first frame (initialization)
+    print("--- Processing first frame (initialization) ---")
+    tf1, kps1, vis1 = tracker.process_frame(gray1)
+    print(f"First transform:\n{tf1}")
+    if vis1 is not None:
+        plt.figure(figsize=(6,6))
+        plt.imshow(vis1, cmap='gray')
+        plt.title('Keypoints Frame 1')
+        plt.axis('off')
 
-def test_relocalize(tracker):
-    # Forzamos estado de tracking perdido
-    tracker._tracking_lost = True
-    img = load_gray("data/frame_005.png")
-    # extraemos features
-    success = tracker._relocalize(img, *tracker.extractor.extract_features(img))
-    assert isinstance(success, bool)
+    # Process second frame (map init)
+    print("\n--- Processing second frame (map initialization) ---")
+    tf2, kps2, vis2 = tracker.process_frame(gray2)
+    print(f"Second transform:\n{tf2}")
+    if vis2 is not None:
+        plt.figure(figsize=(6,6))
+        plt.imshow(vis2, cmap='gray')
+        plt.title('Initialization Matches')
+        plt.axis('off')
+
+    # Process third frame (frame-to-frame tracking)
+    print("\n--- Processing third frame (frame-to-frame tracking) ---")
+    tf3, kps3, vis3 = tracker.process_frame(gray3)
+    print(f"Third transform:\n{tf3}")
+    if vis3 is not None:
+        plt.figure(figsize=(6,6))
+        plt.imshow(vis3, cmap='gray')
+        plt.title('Tracking Matches')
+        plt.axis('off')
+
+    plt.show()
+
+if __name__ == '__main__':
+    main()

@@ -14,7 +14,7 @@ class MapInitializer:
     Class for initializing the map from the first two frames.
     """
     
-    def __init__(self, camera_matrix, min_matches=100, min_inliers_ratio=0.9):
+    def __init__(self, camera_matrix, min_matches=50, min_inliers_ratio=0.9):
         """
         Initialize the map initializer.
         
@@ -108,10 +108,10 @@ class MapInitializer:
             # Depth in first camera (P1 is identity)
             depth1 = pt[2]
             # Depth in second camera (transformed by R and t)
-            print("\n=== Debug Geometría ===")
-            print("Shape R:", R.shape)  # Debe ser (3,3)
-            print("Shape t:", t.shape)  # Debe ser (3,1) o (3,)
-            print("Primer punto pt:", points_3d[0].shape)  # Debe ser (3,)
+            #print("\n=== Debug Geometría ===")
+            #print("Shape R:", R.shape)  # Debe ser (3,3)
+            #print("Shape t:", t.shape)  # Debe ser (3,1) o (3,)
+            #print("Primer punto pt:", points_3d[0].shape)  # Debe ser (3,)
             pt_cam2 = R @ pt + t.ravel()
             depth2 = pt_cam2[2]
             if depth1 > 0 and depth2 > 0:

@@ -203,56 +203,53 @@ class LocalMapper:
         
         # For this simplified version, just save the current map
         self._save_map()
-    
+   
     def _cull_map_points(self):
         """
         Remove low-quality map points.
         """
-        # Criteria for removing points:
-        # 1. Points observed in fewer than min_observations keyframes
-        # 2. Points with high reprojection error
-        
         valid_map_points = []
         for mp in self.map_points:
-            # Check observation count
-            if len(mp['observed_keyframes']) < self.min_observations:
+            # Safely obtener las observaciones (o {} si no existe)
+            obs = mp.get('observed_keyframes', {})
+            # 1) descartar si tiene menos de min_observations
+            if len(obs) < self.min_observations:
                 continue
-            
-            # Check reprojection error (simplified)
+
+            # 2) comprobar reprojection error
             valid = True
-            reprojection_errors = []
-            
-            for kf_id, kp_id in mp['observed_keyframes'].items():
+            for kf_id, kp_id in obs.items():
                 kf = self.keyframes[kf_id]
                 kp = kf['keypoints'][kp_id]
-                
-                # Project 3D point to image
-                P = compute_projection_matrix(kf['pose'][:3, :3], kf['pose'][:3, 3], self.camera_matrix)
-                point_3d_homogeneous = np.append(mp['position'], 1.0)
-                point_proj_homogeneous = P @ point_3d_homogeneous
-                point_proj = point_proj_homogeneous[:2] / point_proj_homogeneous[2]
-                
-                # Calculate reprojection error
-                kp_pt = np.array(kp.pt)
-                error = np.linalg.norm(point_proj - kp_pt)
-                reprojection_errors.append(error)
-                
-                # Check if error is too large
-                if error > 5.0:  # Threshold in pixels
+
+                # Proyectar punto
+                P = compute_projection_matrix(kf['pose'][:3, :3],
+                                              kf['pose'][:3, 3],
+                                              self.camera_matrix)
+                point_h = np.append(mp['position'], 1.0)
+                proj = P @ point_h
+                proj = proj[:2] / proj[2]
+
+                # Error
+                err = np.linalg.norm(proj - np.array(kp.pt))
+                if err > 5.0:
                     valid = False
                     break
-            
-            # Keep the point if it's valid
+
             if valid:
                 valid_map_points.append(mp)
-        
-        # Update map points
+
+        # Actualizar sólo los que han pasado el filtro
         self.map_points = valid_map_points
-        
-        # Update keyframe references to map points
+
+        # Actualizar la lista de map_points por keyframe
         for kf in self.keyframes:
-            kf['map_points'] = [mp['id'] for mp in self.map_points if kf['id'] in mp['observed_keyframes']]
-    
+            kf['map_points'] = [
+                mp['id'] for mp in self.map_points 
+                if kf['id'] in mp.get('observed_keyframes', {})
+            ]
+
+
     def _cull_keyframes(self):
         """
         Remove redundant keyframes.

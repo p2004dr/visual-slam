@@ -14,7 +14,7 @@ orb:
 # Matching parameters
 matcher:
   matcher_type: "bruteforce-hamming"
-  ratio_threshold: 0.75
+  ratio_threshold: 0.85
 
 # Tracking parameters
 tracker:
@@ -34,5 +34,5 @@ output_path: "data/map.ply"
 
 # Runtime options
 skip_frames: 0
-max_frames: 0  # 0 means process all frames
+max_frames: 150  # 0 means process all frames
 display: true
