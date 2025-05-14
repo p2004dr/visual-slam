@@ -65,7 +65,23 @@ class ORBExtractor:
         keypoints, descriptors = self.orb.detectAndCompute(image, None)
         
         return keypoints, descriptors
-    
+    def compute(self, image, keypoints):
+        """
+        Compute descriptors at un conjunto dado de keypoints.
+
+        Args:
+            image (np.array): Imagen en escala de grises o BGR.
+            keypoints (list of cv2.KeyPoint): Puntos donde computar descriptores.
+
+        Returns:
+            tuple: (keypoints, descriptors) — mismos keypoints, descriptores calculados.
+        """
+        # Aseguramos escala de grises
+        if len(image.shape) > 2:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Delegamos en el ORB interno
+        return keypoints, self.orb.compute(image, keypoints)[1]
+   
     def distribute_keypoints(self, image, n_features=None):
         """
         Distribute keypoints evenly across the image using grid-based detection.
@@ -113,7 +129,7 @@ class ORBExtractor:
                 )
                 
                 if cell_keypoints is not None:
-                    # Convertir CADA punto a cv2.KeyPoint ✅
+                    # Convertir CADA punto a cv2.KeyPoint
                     for pt in cell_keypoints:
                         x, y = pt.ravel()
                         kp = cv2.KeyPoint(float(x), float(y), 31)

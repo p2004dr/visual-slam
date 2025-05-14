@@ -1,0 +1,41 @@
+# Camera parameters
+camera:
+  # fx, 0, cx, 0, fy, cy, 0, 0, 1
+  camera_matrix: [796.7, 0.0, 239.0,
+                  0.0, 787.8, 425.0,
+                  0.0, 0.0, 1.0]  # k1, k2, p1, p2, k3 (pendiente de calibración, aquí cero)
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+# ORB parameters
+orb:
+  n_features: 2000
+  scale_factor: 1.2
+  n_levels: 8
+  ini_threshold: 20
+  min_threshold: 7
+
+# Matching parameters
+matcher:
+  matcher_type: "bruteforce-hamming"
+  ratio_threshold: 0.85
+
+# Tracking parameters
+tracker:
+  min_keypoints: 100
+  max_frame_to_keyframe_dist: 50
+  min_tracked_points: 50
+
+# Mapping parameters
+mapper:
+  local_window_size: 10
+  min_observations: 3
+  max_reprojection_error: 2.0
+
+# Input/Output
+video_path: "data/video_gerard_1.mp4"
+output_path: "data/map.ply"
+
+# Runtime options
+skip_frames: 0
+max_frames: 150  # 0 means process all frames
+display: true

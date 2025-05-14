@@ -90,7 +90,6 @@ class MapInitializer:
         valid_matches = [m for m, valid in zip(matches, mask_pose.ravel().astype(bool)) if valid]
         points1 = np.float32([self.first_frame_keypoints[m.queryIdx].pt for m in valid_matches])
         points2 = np.float32([current_keypoints[m.trainIdx].pt for m in valid_matches])
-        
         # Triangulate points
         points_4d = triangulate_points(points1, points2, P1, P2)
         points_3d = convert_to_3d_points(points_4d)

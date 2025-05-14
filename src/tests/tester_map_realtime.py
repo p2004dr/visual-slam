@@ -14,7 +14,7 @@ import numpy as np
 BASEDIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 SRC_DIR = os.path.join(BASEDIR, 'src')
 CONFIG_PATH = os.path.join(BASEDIR, 'configs', 'monocular.yaml')
-VIDEO_PATH = os.path.join(BASEDIR, 'data', 'hospital_video.mp4')
+VIDEO_PATH = os.path.join(BASEDIR, 'data', 'video_gerard_1.mp4')
 OUTPUT_VIDEO = os.path.join(BASEDIR, 'data', 'realtime_slam_output.mp4')
 OUTPUT_PLY = os.path.join(BASEDIR, 'data', 'map.ply')
 

@@ -1,25 +1,21 @@
-#!/usr/bin/env python
-"""
-Test script for DescriptorMatcher with fixed parameters.
-Loads two consecutive frames, extracts ORB features, matches them, and displays the matches.
-"""
 import os
 import sys
 import random
+import math
 import numpy as np
 import cv2
 import yaml
 import matplotlib.pyplot as plt
-from matplotlib.gridspec import GridSpec
 
 # Fixed parameters
 CONFIG_PATH = 'configs/monocular.yaml'
-VIDEO_PATH = 'data/hospital_video.mp4'
-FRAME_OFFSET = 1        # Difference between frames to match (1 = consecutive)
-SAVE_OUTPUT = False     # True to save images instead of showing
+VIDEO_PATH = 'data/video_gerard_1.mp4'
+FRAME_OFFSET = 1         # Difference between frames to match (1 = consecutive)
+GEOM_THRESHOLD = 0.055   # Percentage (0–1) of (width+height)/2 para filtrar desplazamientos grandes
+SAVE_OUTPUT = False      # True to save images instead of showing
 OUTPUT_DIR = 'tests/output'
-FIGURE_WIDTH = 12       # Width of match figure
-FIGURE_HEIGHT = 8       # Height of match figure
+FIGURE_WIDTH = 12        # Width of match figure
+FIGURE_HEIGHT = 8        # Height of match figure
 
 # Add src directory to path to import modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -54,7 +50,6 @@ def main():
         return
 
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    # Choose a random frame index with available next frame
     idx = random.randint(0, total - FRAME_OFFSET - 1)
     idx2 = idx + FRAME_OFFSET
 
@@ -80,12 +75,21 @@ def main():
     kp1, des1 = orb.detect_and_compute(gray1)
     kp2, des2 = orb.detect_and_compute(gray2)
 
-    # Match descriptors
+    # Match descriptors (Lowe's ratio test)
     matches = matcher.match(des1, des2, ratio_test=True)
-    print(f"Matching Frame {idx} -> {idx2}: {len(matches)} matches found")
+    print(f"Raw matches Frame {idx} → {idx2}: {len(matches)}")
 
-    # Draw matches
-    match_img = matcher.draw_matches(frame1, kp1, frame2, kp2, matches)
+    # Geometric-distance filtering
+    img_h, img_w = gray1.shape
+    filtered_matches = matcher.filter_matches_by_geometric_distance(
+        kp1, kp2, matches,
+        threshold_percent=GEOM_THRESHOLD,
+        image_shape=(img_h, img_w)
+    )
+    print(f"Filtered matches (geom ≤ {GEOM_THRESHOLD*100:.1f}% of (w+h)/2): {len(filtered_matches)}")
+
+    # Draw filtered matches
+    match_img = matcher.draw_matches(frame1, kp1, frame2, kp2, filtered_matches)
 
     # Show or save
     if SAVE_OUTPUT:
@@ -96,9 +100,10 @@ def main():
     else:
         plt.figure(figsize=(FIGURE_WIDTH, FIGURE_HEIGHT))
         plt.imshow(cv2.cvtColor(match_img, cv2.COLOR_BGR2RGB))
-        plt.title(f"Matches: {len(matches)} between frames {idx} & {idx2}")
+        plt.title(f"Matches: {len(filtered_matches)} between frames {idx} & {idx2}")
         plt.axis('off')
         plt.show()
+
 
 if __name__ == '__main__':
     main()

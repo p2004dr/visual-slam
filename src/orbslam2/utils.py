@@ -158,3 +158,16 @@ def compute_projection_matrix(R, t, camera_matrix):
     P = camera_matrix @ Rt
 
     return P
+
+def save_orb_keypoints(path, keypoints, descriptors):
+    # Guardar coordenadas + descriptors en un .npz para reutilizar si hace falta
+    pts = np.array([kp.pt for kp in keypoints], dtype=np.float32)
+    np.savez(path, points=pts, descriptors=descriptors)
+
+def load_groundtruth_matcher(path):
+    with open(path, 'r') as f:
+        data = yaml.safe_load(f)
+    pts1 = np.array(data['keypoints1'], dtype=np.float32)
+    pts2 = np.array(data['keypoints2'], dtype=np.float32)
+    matches = [tuple(m) for m in data['matches']]
+    return pts1, pts2, matches

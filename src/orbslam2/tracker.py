@@ -210,7 +210,6 @@ class Tracker:
             
         # Match features with the last frame
         matches = self.matcher.match(self.last_descriptors, descriptors)
-        
         # Filter matches
         matches = self.matcher.filter_matches_by_distance(matches)
         

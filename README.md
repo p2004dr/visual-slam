@@ -81,12 +81,6 @@ src/tests/
 
     test_matcher.py verifica diversas estrategias de matching, ratio test y filtrado.
 
-
-
-PROMPT:
-
-Tenemos un poryecto donde queremos ser capaces de hacer nuestra propia implementacion de un visual slam, inspirado en orb-slam2, te dare gran parte de su contexto y nos tendras que ayudar a programar. Pero primero lo que queremos es que nos des toda la estructura de carpetas en formato .md  y expliques un poco lo q hace cada script:
-tenemos un proyecto de python llamado visual-slam, donde tenemos una carpeta de configs con monocular.yaml:
 # Camera parameters
 camera:
   camera_matrix: [320.0, 0.0, 320.0, 0.0, 320.0, 240.0, 0.0, 0.0, 1.0]  # fx, 0, cx, 0, fy, cy, 0, 0, 1

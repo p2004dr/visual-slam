@@ -6,6 +6,7 @@ This module handles matching features between frames using ORB descriptors.
 
 import numpy as np
 import cv2
+import math
 
 
 class DescriptorMatcher:
@@ -105,6 +106,41 @@ class DescriptorMatcher:
         
         return matches
     
+    def filter_matches_by_geometric_distance(self,
+                                             keypoints1,
+                                             keypoints2,
+                                             matches,
+                                             threshold_percent,
+                                             image_shape):
+        """
+        Filtra matches cuyo desplazamiento geométrico entre par de keypoints
+        exceda un umbral relativo.
+
+        Args:
+            keypoints1 (list of cv2.KeyPoint): keypoints en la primera imagen.
+            keypoints2 (list of cv2.KeyPoint): keypoints en la segunda imagen.
+            matches (list of cv2.DMatch): matches a filtrar.
+            threshold_percent (float): valor en [0,1], porcentaje de (width+height)/2.
+            image_shape (tuple): (height, width) de la imagen.
+
+        Returns:
+            list of cv2.DMatch: subset de matches que cumplen el umbral.
+        """
+        height, width = image_shape[:2]
+        # Distancia máxima permitida
+        max_dist = ((width + height) / 2.0) * threshold_percent
+
+        filtered = []
+        for m in matches:
+            pt1 = keypoints1[m.queryIdx].pt
+            pt2 = keypoints2[m.trainIdx].pt
+            dx = pt2[0] - pt1[0]
+            dy = pt2[1] - pt1[1]
+            dist = math.hypot(dx, dy)
+            if dist <= max_dist:
+                filtered.append(m)
+        return filtered
+
     def filter_matches_by_distance(self, matches, distance_threshold=None):
         """
         Filter matches by distance.
