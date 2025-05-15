@@ -1,104 +1,181 @@
 """
 Map initialization module for ORB-SLAM2 Python implementation.
+
+This module handles the initialization of the map from the first two frames.
 """
 
 import numpy as np
 import cv2
+from .utils import triangulate_points, convert_to_3d_points, calculate_essential_matrix, recover_pose, compute_projection_matrix
 
 
 class MapInitializer:
     """
-    Class for initializing the map from two frames.
+    Class for initializing the map from the first two frames.
     """
     
-    def __init__(self, camera_matrix):
+    def __init__(self, camera_matrix, min_matches=10, min_inliers_ratio=0.9):
+        """
+        Initialize the map initializer.
+        
+        Args:
+            camera_matrix (np.array): 3x3 camera intrinsic matrix.
+            min_matches (int): Minimum number of matches required for initialization.
+            min_inliers_ratio (float): Minimum ratio of inliers for initialization.
+        """
         self.camera_matrix = camera_matrix
-        self.first_frame = None
-        self.first_kps = None
-        self.first_desc = None
-        self.matches = None
-        self.last_matches = None
-
-    def initialize(self, kps1, desc1, kps2, desc2, matcher):
-        matches = matcher.match(desc1, desc2)
-        self.last_matches = matches
-
-        # Reducir mínimo de matches requeridos
-        if len(matches) < 80:  # Cambiado de 100 a 80
-            return False, None, None, matches
+        self.min_matches = min_matches
+        self.min_inliers_ratio = min_inliers_ratio
+        self.initialization_done = False
+        self.first_frame_keypoints = None
+        self.first_frame_descriptors = None
+        self.first_frame_image = None
+        self.current_frame_keypoints = None 
         
-        pts1 = np.float32([kps1[m.queryIdx].pt for m in matches])
-        pts2 = np.float32([kps2[m.trainIdx].pt for m in matches])
+    def set_first_frame(self, keypoints, descriptors, image):
+        """
+        Set the first frame keypoints and descriptors.
+        
+        Args:
+            keypoints (list): List of keypoints from the first frame.
+            descriptors (np.array): Descriptors corresponding to keypoints.
+            image (np.array): First frame image for later triangulation.
+        """
+        self.first_frame_keypoints = keypoints
+        self.first_frame_descriptors = descriptors
+        self.first_frame_image = image.copy()
+        self.initialization_done = False
+        
+    def initialize(self, current_keypoints, current_descriptors, matcher, current_image):
+        """
+        Initialize the map using the first and current frame.
+        
+        Args:
+            current_keypoints (list): List of keypoints from the current frame.
+            current_descriptors (np.array): Descriptors corresponding to current keypoints.
+            matcher (DescriptorMatcher): Descriptor matcher instance.
+            current_image (np.array): Current frame image.
+            
+        Returns:
+            tuple: (success, R, t, initial_map_points, matches)
+        """
+        # Check if we have the first frame
+        if self.first_frame_keypoints is None or self.first_frame_descriptors is None:
+            return False, None, None, None, None
+        
+        # Match features between first and current frame
+        matches = matcher.match(self.first_frame_descriptors, current_descriptors)
+        
+        # Check if we have enough matches
+        if len(matches) < self.min_matches:
+            print(f"Not enough matches for initialization: {len(matches)} < {self.min_matches}")
+            return False, None, None, None, matches
+        
+        # Get matched points
+        points1 = np.float32([self.first_frame_keypoints[m.queryIdx].pt for m in matches])
+        points2 = np.float32([current_keypoints[m.trainIdx].pt for m in matches])
+        
+        # Calculate essential matrix with higher threshold
+        E, mask = calculate_essential_matrix(points1, points2, self.camera_matrix, threshold=3.0)
+        
+        # Recover pose (R,t) from essential matrix
+        _, R, t, mask_pose, *_ = recover_pose(E, points1, points2, self.camera_matrix, mask)
+        t = t.reshape(3, 1) if t.ndim == 1 else t
+        
+        # Create projection matrices
+        P1 = compute_projection_matrix(np.eye(3), np.zeros((3, 1)), self.camera_matrix)
+        P2 = compute_projection_matrix(R, t, self.camera_matrix)
+        
+        # Filter matches using pose recovery mask
+        valid_matches = [m for m, valid in zip(matches, mask_pose.ravel().astype(bool)) if valid]
+        points1 = np.float32([self.first_frame_keypoints[m.queryIdx].pt for m in valid_matches])
+        points2 = np.float32([current_keypoints[m.trainIdx].pt for m in valid_matches])
+        # Triangulate points
+        points_4d = triangulate_points(points1, points2, P1, P2)
+        points_3d = convert_to_3d_points(points_4d)
 
-        # Aumentar umbral RANSAC para Essential Matrix
-        E, mask = cv2.findEssentialMat(
-            pts1, pts2, self.camera_matrix,
-            method=cv2.RANSAC,
-            prob=0.999,
-            threshold=3.0  # Aumentado de 1.0 a 3.0
+        
+        print("\n=== Debug Triangulación ===")
+        print("Shape points_4d:", points_4d.shape)  # Debería ser (4, N)
+        print("Ejemplo punto 4D:", points_4d[:,0])  # Debería tener 4 componentes
+        print("Shape points_3d:", points_3d.shape)  # Debería ser (3, N) o (N,3)
+        print("Ejemplo punto 3D:", points_3d[0])    # Debería tener 3 componentes
+
+        # Filter points behind cameras
+        valid_indices = []
+        for i, pt in enumerate(points_3d):
+            # Depth in first camera (P1 is identity)
+            depth1 = pt[2]
+            # Depth in second camera (transformed by R and t)
+            #print("\n=== Debug Geometría ===")
+            #print("Shape R:", R.shape)  # Debe ser (3,3)
+            #print("Shape t:", t.shape)  # Debe ser (3,1) o (3,)
+            #print("Primer punto pt:", points_3d[0].shape)  # Debe ser (3,)
+            pt_cam2 = R @ pt + t.ravel()
+            depth2 = pt_cam2[2]
+            if depth1 > 0 and depth2 > 0:
+                valid_indices.append(i)
+        
+        points_3d = points_3d[valid_indices]
+        valid_matches = [valid_matches[i] for i in valid_indices]
+        
+        # Check if we have sufficient valid points
+        if len(points_3d) < self.min_matches//2:
+            print(f"Insufficient valid 3D points after filtering: {len(points_3d)}")
+            return False, None, None, None, valid_matches
+        
+        # Extract colors for visualization
+        colors = []
+        for match in valid_matches:
+            kp = self.first_frame_keypoints[match.queryIdx]
+            x, y = int(kp.pt[0]), int(kp.pt[1])
+            if 0 <= x < self.first_frame_image.shape[1] and 0 <= y < self.first_frame_image.shape[0]:
+                if self.first_frame_image.ndim == 3:  # Color image
+                    color = self.first_frame_image[y, x, :]
+                else:  # Grayscale
+                    color = np.array([self.first_frame_image[y, x]]*3)
+            else:
+                color = np.array([0, 0, 255])
+            colors.append(color)
+        
+        # Create map points
+        initial_map_points = [{
+            'position': pt,
+            'color': colors[i],
+            'keypoint_references': {0: m.queryIdx, 1: m.trainIdx},
+            'observed_frames': [0, 1]
+        } for i, (pt, m) in enumerate(zip(points_3d, valid_matches))]
+        
+        self.initialization_done = True
+        
+        self.current_frame_keypoints = current_keypoints
+        return True, R, t, initial_map_points, valid_matches
+        
+    def draw_initialization(self, first_image, current_image, matches):
+        """
+        Dibuja los matches entre el primer frame y el frame actual.
+        
+        Args:
+            first_image (np.array): Imagen del primer frame.
+            current_image (np.array): Imagen del frame actual.
+            matches (list): Lista de objetos DMatch.
+            
+        Returns:
+            np.array: Imagen con los matches dibujados.
+        """
+        # Convertir a color si es necesario
+        first_img = cv2.cvtColor(first_image, cv2.COLOR_GRAY2BGR) if len(first_image.shape) == 2 else first_image.copy()
+        current_img = cv2.cvtColor(current_image, cv2.COLOR_GRAY2BGR) if len(current_image.shape) == 2 else current_image.copy()
+
+        # Usar TODOS los keypoints del frame actual, no solo los filtrados
+        return cv2.drawMatches(
+            first_img, 
+            self.first_frame_keypoints,
+            current_img, 
+            self.current_frame_keypoints,  # Keypoints completos del segundo frame
+            matches, 
+            None,
+            flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
+            matchColor=(0, 255, 0),  # Color verde para los matches
+            singlePointColor=(255, 0, 0)  # Color azul para keypoints no emparejados
         )
-        
-        if E is None or mask.sum() < 40:  # Reducido de 50 a 40
-            return False, None, None, matches
-            
-        inliers_mask = mask.ravel() > 0
-        pts1_inliers = pts1[inliers_mask]
-        pts2_inliers = pts2[inliers_mask]
-        matches_inliers = [m for i, m in enumerate(matches) if inliers_mask[i]]
-        
-        # Recuperar pose con chequeo mejorado
-        _, R, t, mask_pose = cv2.recoverPose(
-            E, pts1_inliers, pts2_inliers,
-            self.camera_matrix,
-            mask=mask[inliers_mask].ravel()  # Pasar máscara actualizada
-        )
-
-        # Validación 3D de puntos triangulados
-        if mask_pose.sum() >= 40:  # Reducido de 50 a 40
-            valid = mask_pose.ravel() > 0
-            pts1_valid = pts1_inliers[valid]
-            pts2_valid = pts2_inliers[valid]
-            
-            # Matrices de proyección
-            P1 = np.hstack([np.eye(3), np.zeros((3, 1))])
-            P2 = np.hstack([R, t.reshape(3, 1)])
-            
-            # Triangulación directa
-            points_4d = cv2.triangulatePoints(P1, P2, pts1_valid.T, pts2_valid.T)
-            points_3d = (points_4d[:3] / points_4d[3]).T
-            
-            # Verificar profundidades positivas en ambos sistemas de coordenadas
-            depths1 = points_3d[:, 2]
-            depths2 = (points_3d @ R.T + t.reshape(1, 3))[:, 2]
-            valid_depths = (depths1 > 0.01) & (depths2 > 0.01)  # Evitar puntos muy cercanos
-            
-            if valid_depths.sum() < 0.5 * len(points_3d):
-                print(f"Puntos 3D inválidos: {valid_depths.sum()}/{len(points_3d)}")
-                return False, None, None, matches_inliers
-        else:
-            return False, None, None, matches_inliers
-
-        # Chequeo de paralaje ajustado
-        if not self._check_parallax(R, t, pts1_valid, pts2_valid):
-            return False, None, None, matches_inliers
-            
-        return True, R, t, matches_inliers
-
-    def _check_parallax(self, R, t, pts1, pts2, min_angle_deg=1.0):
-        pts1_norm = cv2.undistortPoints(pts1.reshape(-1, 1, 2), self.camera_matrix, None)
-        pts2_norm = cv2.undistortPoints(pts2.reshape(-1, 1, 2), self.camera_matrix, None)
-        
-        # Corregir sintaxis de hstack
-        rays1 = np.hstack((pts1_norm.reshape(-1, 2), np.ones((len(pts1), 1))))  # <-- Paréntesis adicional
-        rays2 = np.hstack((pts2_norm.reshape(-1, 2), np.ones((len(pts2), 1))))  # <-- Paréntesis adicional
-        
-        rays1 /= np.linalg.norm(rays1, axis=1, keepdims=True)
-        rays2_in_1 = (rays2 @ R.T) / np.linalg.norm(rays2, axis=1, keepdims=True)
-        
-        cos_angles = np.sum(rays1 * rays2_in_1, axis=1)
-        angles_deg = np.degrees(np.arccos(np.clip(cos_angles, -1.0, 1.0)))
-        
-        sufficient_parallax = np.mean(angles_deg > min_angle_deg) > 0.3
-        print(f"Paralaje promedio: {np.mean(angles_deg):.1f}°, Buenas: {np.sum(angles_deg > min_angle_deg)}/{len(angles_deg)}")
-        
-        return sufficient_parallax
