@@ -14,7 +14,7 @@ class MapInitializer:
     Class for initializing the map from the first two frames.
     """
     
-    def __init__(self, camera_matrix, min_matches=50, min_inliers_ratio=0.9):
+    def __init__(self, camera_matrix, min_matches=10, min_inliers_ratio=0.9):
         """
         Initialize the map initializer.
         

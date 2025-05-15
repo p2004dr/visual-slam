@@ -18,7 +18,7 @@ class Tracker:
     """
     
     def __init__(self, camera_matrix, distortion_coeffs=None, 
-                 n_features=2000, local_mapper=None):
+                 n_features=2000, local_mapper=None, ratio_threshold=0.75):
         """
         Initialize the tracker.
         
@@ -35,8 +35,10 @@ class Tracker:
         self.extractor = ORBExtractor(n_features=n_features)
         
         # Create feature matcher
-        self.matcher = DescriptorMatcher(matcher_type='bruteforce-hamming')
-        
+        self.matcher = DescriptorMatcher(
+            matcher_type='bruteforce-hamming',
+            ratio_threshold=ratio_threshold
+        )        
         # Map initializer
         self.initializer = MapInitializer(camera_matrix)
         
@@ -210,8 +212,23 @@ class Tracker:
             
         # Match features with the last frame
         matches = self.matcher.match(self.last_descriptors, descriptors)
+
+        # Filter matches
+
+        img_h, img_w = frame.shape[:2]
+        threshold_percent = 0.02
+
+        matches = self.matcher.filter_matches_by_geometric_distance(
+            self.last_keypoints,   # keypoints de la imagen anterior
+            keypoints,             # keypoints de la imagen actual
+            matches,           # tus DMatch sin filtrar
+            threshold_percent,
+            image_shape=(img_h, img_w)
+        )
+
         # Filter matches
         matches = self.matcher.filter_matches_by_distance(matches)
+
         
         # Need at least 8 matches to estimate essential matrix
         if len(matches) < 8:
@@ -238,10 +255,11 @@ class Tracker:
         
         # Visualization of matches
         inlier_matches = [m for i, m in enumerate(matches) if mask[i]]
+        print(len(inlier_matches))
         vis_image = cv2.drawMatches(
             self.last_frame, self.last_keypoints,
             frame, keypoints,
-            inlier_matches[:50],  # Show top 50 matches for clarity
+            inlier_matches[:200],  # Show top matches for clarity
             None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
         )
         
